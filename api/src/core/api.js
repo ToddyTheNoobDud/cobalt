@@ -2,7 +2,6 @@ import cors from "cors";
 import http from "node:http";
 import rateLimit from "express-rate-limit";
 import { setGlobalDispatcher, ProxyAgent } from "undici";
-import { getCommit, getBranch, getRemote, getVersion } from "@imput/version-info";
 
 import jwt from "../security/jwt.js";
 import stream from "../stream/stream.js";
@@ -20,14 +19,8 @@ import { verifyStream, getInternalStream } from "../stream/manage.js";
 import { createResponse, normalizeRequest, getIP } from "../processing/request.js";
 import * as APIKeys from "../security/api-keys.js";
 import * as Cookies from "../processing/cookie/manager.js";
+const cookiePath = await import("../../cookies.json", { assert: { type: "json" } });
 
-const git = {
-    branch: await getBranch(),
-    commit: await getCommit(),
-    remote: await getRemote(),
-}
-
-const version = await getVersion();
 
 const acceptRegex = /^application\/json(; charset=utf-8)?$/;
 
@@ -47,7 +40,6 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
 
     const serverInfo = JSON.stringify({
         cobalt: {
-            version: version,
             url: env.apiURL,
             startTime: `${startTimestamp}`,
             durationLimit: env.durationLimit,
@@ -56,7 +48,6 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
                 return friendlyServiceName(e);
             }),
         },
-        git,
     })
 
     const handleRateExceeded = (_, res) => {
@@ -357,10 +348,6 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
                 Bright(Cyan("cobalt ")) + Bright("API ^ω⁠^") + "\n" +
 
                 "~~~~~~\n" +
-                Bright("version: ") + version + "\n" +
-                Bright("commit: ") + git.commit + "\n" +
-                Bright("branch: ") + git.branch + "\n" +
-                Bright("remote: ") + git.remote + "\n" +
                 Bright("start time: ") + startTime.toUTCString() + "\n" +
                 "~~~~~~\n" +
 
@@ -373,11 +360,13 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             APIKeys.setup(env.apiKeyURL);
         }
 
-        if (env.cookiePath) {
-            Cookies.setup(env.cookiePath);
+        if (cookiePath) {
+            Cookies.setup(cookiePath).catch(e => {
+                console.error(`${Yellow('[!]')} failed to load cookies.`);
+                console.error('error:', e);
+            });
         }
     });
-
     if (isCluster) {
         const istreamer = express();
         istreamer.get('/itunnel', itunnelHandler);
