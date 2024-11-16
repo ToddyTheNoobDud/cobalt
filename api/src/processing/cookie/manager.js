@@ -1,45 +1,46 @@
+import { parse as parseSetCookie, splitCookiesString } from 'set-cookie-parser';
+
 import Cookie from './cookie.js';
 
 import { readFile, writeFile } from 'fs/promises';
 import { Green, Yellow } from '../../misc/console-text.js';
-import { parse as parseSetCookie, splitCookiesString } from 'set-cookie-parser';
 import * as cluster from '../../misc/cluster.js';
 import { isCluster } from '../../config.js';
 
 const WRITE_INTERVAL = 60000;
 let cookies = {}, dirty = false, intervalId;
+const cookiePath = new URL('../../../cookies.json', import.meta.url);
 
-function writeChanges(cookiePath) {
+async function writeChanges() {
     if (!dirty) return;
     dirty = false;
 
-    writeFile(cookiePath, JSON.stringify(cookies, null, 4)).catch(() => {
+    await writeFile(cookiePath, JSON.stringify(cookies, null, 4)).catch(() => {
         clearInterval(intervalId)
     })
 }
 
-const setupMain = async (cookiePath) => {
+const setupMain = async () => {
     try {
         cookies = await readFile(cookiePath, 'utf8');
         cookies = JSON.parse(cookies);
-        intervalId = setInterval(() => writeChanges(cookiePath), WRITE_INTERVAL);
+        intervalId = setInterval(writeChanges, WRITE_INTERVAL);
 
         cluster.broadcast({ cookies });
 
         console.log(`${Green('[✓]')} cookies loaded successfully!`);
-    } catch (e) {
+    } catch(e) {
         console.error(`${Yellow('[!]')} failed to load cookies.`);
         console.error('error:', e);
     }
 }
-
 const setupWorker = async () => {
     cookies = (await cluster.waitFor('cookies')).cookies;
 }
 
-export const setup = async (cookiePath) => {
+export const setup = async () => {
     if (cluster.isPrimary) {
-        await setupMain(cookiePath);
+        await setupMain();
     } else if (cluster.isWorker) {
         await setupWorker();
     }
@@ -112,3 +113,4 @@ export function updateCookie(cookie, headers) {
 
     updateCookieValues(cookie, values);
 }
+
