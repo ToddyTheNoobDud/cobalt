@@ -1,9 +1,7 @@
-import { getVersion } from "@imput/version-info";
+
 import { services } from "./processing/service-config.js";
 import { supportsReusePort } from "./misc/cluster.js";
-
-const version = await getVersion();
-
+const cookies = await import("../cookies.json", { assert: { type: "json" } });
 const disabledServices = process.env.DISABLED_SERVICES?.split(',') || [];
 const enabledServices = new Set(Object.keys(services).filter(e => {
     if (!disabledServices.includes(e)) {
@@ -12,9 +10,10 @@ const enabledServices = new Set(Object.keys(services).filter(e => {
 }));
 
 const env = {
-    apiURL: process.env.API_URL || '',
+    apiURL: process.env.API_URL || 'http://localhost:9000/',
     apiPort: process.env.API_PORT || 9000,
     tunnelPort: process.env.API_PORT || 9000,
+
 
     listenAddress: process.env.API_LISTEN_ADDRESS,
     freebindCIDR: process.platform === 'linux' && process.env.FREEBIND_CIDR,
@@ -22,7 +21,7 @@ const env = {
     corsWildcard: process.env.CORS_WILDCARD !== '0',
     corsURL: process.env.CORS_URL,
 
-    cookiePath: process.env.COOKIE_PATH,
+    cookiePath: process.env.COOKIE_PATH || cookies,
 
     rateLimitWindow: (process.env.RATELIMIT_WINDOW && parseInt(process.env.RATELIMIT_WINDOW)) || 60,
     rateLimitMax: (process.env.RATELIMIT_MAX && parseInt(process.env.RATELIMIT_MAX)) || 20,
