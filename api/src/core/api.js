@@ -9,7 +9,7 @@ import match from "../processing/match.js";
 
 import { env, isCluster, setTunnelPort } from "../config.js";
 import { extract } from "../processing/url.js";
-import { Green, Bright, Cyan } from "../misc/console-text.js";
+import { Green, Bright, Cyan, Yellow } from "../misc/console-text.js";
 import { hashHmac } from "../security/secrets.js";
 import { createStore } from "../store/redis-ratelimit.js";
 import { randomizeCiphers } from "../misc/randomize-ciphers.js";
@@ -20,7 +20,6 @@ import { createResponse, normalizeRequest, getIP } from "../processing/request.j
 import * as APIKeys from "../security/api-keys.js";
 import * as Cookies from "../processing/cookie/manager.js";
 const cookiePath = await import("../../cookies.json", { assert: { type: "json" } });
-
 
 const acceptRegex = /^application\/json(; charset=utf-8)?$/;
 
@@ -33,7 +32,6 @@ const fail = (res, code, context) => {
     const { status, body } = createResponse("error", { code, context });
     res.status(status).json(body);
 }
-
 export const runAPI = async (express, app, __dirname, isPrimary = true) => {
     const startTime = new Date();
     const startTimestamp = startTime.getTime();
@@ -48,7 +46,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
                 return friendlyServiceName(e);
             }),
         },
-    })
+    });
 
     const handleRateExceeded = (_, res) => {
         const { status, body } = createResponse("error", {
@@ -60,7 +58,13 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         return res.status(status).json(body);
     };
 
-    const keyGenerator = (req) => hashHmac(getIP(req), 'rate').toString('base64url');
+    const keyGenerator = (req) => {
+        if (req.service === 'youtube') {
+            return hashHmac(`${getIP(req) || randomIP()}`, 'rate').toString('base64url');
+        } else {
+            return hashHmac(getIP(req) || randomIP(), 'rate').toString('base64url');
+        }
+    };
 
     const sessionLimiter = rateLimit({
         windowMs: 60000,
@@ -80,7 +84,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         keyGenerator: req => req.rateLimitKey || keyGenerator(req),
         store: await createStore('api'),
         handler: handleRateExceeded
-    })
+    });
 
     const apiTunnelLimiter = rateLimit({
         windowMs: env.rateLimitWindow * 1000,
@@ -90,9 +94,9 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         keyGenerator: req => req.rateLimitKey || keyGenerator(req),
         store: await createStore('tunnel'),
         handler: (_, res) => {
-            return res.sendStatus(400)
+            return res.sendStatus(400);
         }
-    })
+    });
 
     app.set('trust proxy', ['loopback', 'uniquelocal']);
 
@@ -124,13 +128,6 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
 
         const { success, error } = APIKeys.validateAuthorization(req);
         if (!success) {
-            // We call next() here if either if:
-            // a) we have user sessions enabled, meaning the request
-            //    will still need a Bearer token to not be rejected, or
-            // b) we do not require the user to be authenticated, and
-            //    so they can just make the request with the regular
-            //    rate limit configuration;
-            // otherwise, we reject the request.
             if (
                 (env.sessionEnabled || !env.authRequired)
                 && ['missing', 'not_api_key'].includes(error)
@@ -159,7 +156,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
                 return fail(res, "error.api.auth.jwt.invalid");
             }
 
-            const [ type, token, ...rest ] = authorization.split(" ");
+            const [type, token, ...rest] = authorization.split(" ");
             if (!token || type.toLowerCase() !== 'bearer' || rest.length) {
                 return fail(res, "error.api.auth.jwt.invalid");
             }
@@ -175,15 +172,21 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         next();
     });
 
+    function randomIP() {
+        const octets = [0, 0, 0, 0].map(() => Math.floor(Math.random() * 256));
+        return `${octets.join(".")}`;
+    }
     app.post('/', apiLimiter);
     app.use('/', express.json({ limit: 1024, strict: false }));
 
-    app.use('/', (err, _, res, next) => {
-        if (err) {
-            const { status, body } = createResponse("error", {
-                code: "error.api.invalid_body",
-            });
-            return res.status(status).json(body);
+    // Validation and endpoint logic
+    app.post('/', async (req, res, next) => {
+        const request = req.body;
+        // req.ip = randomIP();
+        req.headers["x-real-ip"] = randomIP();
+        const { success } = await normalizeRequest(request);
+        if (!success) {
+            return fail(res, "error.api.invalid_body");
         }
 
         next();
@@ -209,11 +212,6 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             return fail(res, "error.api.auth.turnstile.invalid");
         }
 
-        try {
-            res.json(jwt.generate());
-        } catch {
-            return fail(res, "error.api.generic");
-        }
     });
 
     app.post('/', async (req, res) => {
@@ -233,6 +231,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         if (!parsed) {
             return fail(res, "error.api.link.invalid");
         }
+
         if ("error" in parsed) {
             let context;
             if (parsed?.context) {
@@ -250,10 +249,11 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             });
 
             res.status(result.status).json(result.body);
-        } catch {
-            fail(res, "error.api.generic");
+        } catch (error) {
+            console.error('Error during match execution:', error); 
+            return fail(res, "error.api.generic");
         }
-    })
+    });
 
     app.get('/tunnel', apiTunnelLimiter, async (req, res) => {
         const id = String(req.query.id);
@@ -283,8 +283,16 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             streamInfo.range = req.headers['range'];
         }
 
-        return stream(res, streamInfo);
+        try {
+            await stream(res, { type: 'internal', ip: req.ip, ...streamInfo });
+        } catch (error) {
+            if (error.code === 'error.api.fetch.critical') {
+                return fail(res, "error.api.fetch.critical");
+            }
+            throw error;
+        }
     });
+
     const itunnelHandler = (req, res) => {
         if (!req.ip.endsWith('127.0.0.1')) {
             return res.sendStatus(403);
@@ -308,7 +316,14 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             streamInfo.type = 'proxy';
         }
 
-        return stream(res, { type: 'internal', ...streamInfo });
+        try {
+            stream(res, { type: 'internal', ip: req.ip, ...streamInfo });
+        } catch (error) {
+            if (error.code === 'error.api.fetch.critical') {
+                return fail(res, "error.api.fetch.critical");
+            }
+            throw error;
+        }
     };
 
     app.get('/itunnel', itunnelHandler);
@@ -327,7 +342,8 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
     });
 
     // handle all express errors
-    app.use((_, __, res, ___) => {
+    app.use((err, req, res, next) => {
+        console.error('Unhandled error:', err);
         return fail(res, "error.api.generic");
     });
 
@@ -376,8 +392,8 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         const istreamer = express();
         istreamer.get('/itunnel', itunnelHandler);
         const server = istreamer.listen({
-            port: 0,
-            host: '127.0.0.1',
+            port: 1730,
+            host: 'de01-2.uniplex.xyz',
             exclusive: true
         }, () => {
             const { port } = server.address();
@@ -386,3 +402,4 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         });
     }
 }
+
