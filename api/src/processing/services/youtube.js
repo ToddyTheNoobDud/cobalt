@@ -57,11 +57,28 @@ const transformSessionData = (cookie) => {
     }
     return values;
 }
+
+const generateRandomIP = () => {
+    // Generate a random IP in the range 1.0.0.1 to 223.255.255.254
+    const ipParts = [];
+    for (let i = 0; i < 4; i++) {
+        if (i === 0) {
+            // First octet must be in the range 1-223 (exclude 0 and 127.x.x.x)
+            ipParts.push(Math.floor(Math.random() * 223) + 1);
+        } else {
+            // Other octets can be in the range 0-255
+            ipParts.push(Math.floor(Math.random() * 256));
+        }
+    }
+    return ipParts.join('.');
+}
 const cloneInnertube = async (customFetch) => {
     const shouldRefreshPlayer = lastRefreshedAt + PLAYER_REFRESH_PERIOD < new Date();
     if (!innertube || shouldRefreshPlayer) {
         innertube = await Innertube.create({
-            fetch: customFetch
+            fetch: customFetch,
+            // Generate random ip to avoid IP blocks
+            ip: generateRandomIP(),
         });
         lastRefreshedAt = +new Date();
     }
@@ -74,7 +91,8 @@ const cloneInnertube = async (customFetch) => {
         innertube.session.player,
         undefined,
         customFetch ?? innertube.session.http.fetch,
-        innertube.session.cache
+        innertube.session.cache,
+        innertube.session.ip
     );
 
     const cookie = getCookie('youtube_oauth');
@@ -118,7 +136,9 @@ export default async function(o) {
         yt = await cloneInnertube(
             (input, init) => fetch(input, {
                 ...init,
-                dispatcher: o.dispatcher
+                headers: init?.headers ?? {}, // Avoid undefined headers
+                'x-forwarded-for': generateRandomIP(),
+                dispatcher: o.dispatcher,
             })
         );
     } catch(e) {
@@ -222,6 +242,9 @@ export default async function(o) {
 
         const fetchedHlsManifest = await fetch(hlsManifest, {
             dispatcher: o.dispatcher,
+            headers: {
+                'x-forwarded-for': generateRandomIP(),
+            }
         }).then(r => {
             if (r.status === 200) {
                 return r.text();
@@ -269,7 +292,6 @@ export default async function(o) {
         }
 
         audio = selected.audio.find(i => i.isDefault);
-
         // some videos (mainly those with AI dubs) don't have any tracks marked as default
         // why? god knows, but we assume that a default track is marked as such in the title
         if (!audio) {
@@ -309,6 +331,15 @@ export default async function(o) {
 
         const earlyBestVideo = adaptive_formats.find(i => checkBestVideo(i));
         const earlyBestAudio = adaptive_formats.find(i => checkBestAudio(i));
+        const getRandomIp = () => {
+            const octets = [0, 0, 0, 0];
+
+            for (let i = 0; i < 4; i++) {
+                octets[i] = Math.floor(Math.random() * 256).toString();
+            }
+
+            return octets.join(".");
+        };
 
         // check if formats have all needed media and fall back to h264 if not
         if (["vp9", "av1"].includes(format) && checkNoMedia(earlyBestVideo, earlyBestAudio)) {
@@ -349,7 +380,7 @@ export default async function(o) {
                     width: i.width,
                     height: i.height,
                 })
-            }
+            };
 
             const bestQuality = qual(bestVideo);
             const useBestQuality = quality >= bestQuality;
@@ -360,12 +391,12 @@ export default async function(o) {
 
             if (!video) video = bestVideo;
         }
-    }
+    };
 
     const fileMetadata = {
         title: cleanString(basicInfo.title.trim()),
         artist: cleanString(basicInfo.author.replace("- Topic", "").trim())
-    }
+    };
 
     if (basicInfo?.short_description?.startsWith("Provided to YouTube by")) {
         const descItems = basicInfo.short_description.split("\n\n", 5);
@@ -385,7 +416,7 @@ export default async function(o) {
         title: fileMetadata.title,
         author: fileMetadata.artist,
         youtubeDubName: dubbedLanguage || false,
-    }
+    };
 
     if (audio && o.isAudioOnly) {
         let bestAudio = format === "h264" ? "m4a" : "opus";
@@ -432,12 +463,18 @@ export default async function(o) {
         filenameAttributes.qualityLabel = `${resolution}p`;
         filenameAttributes.youtubeFormat = format;
 
+        const ip = getRandomIp();
+        console.log(`Using IP: ${ip}`);
+
         return {
             type: "merge",
             urls: [
                 video,
                 audio,
             ],
+            headers: {
+                "x-forwarded-for": ip,
+            },
             filenameAttributes,
             fileMetadata,
             isHLS: o.youtubeHLS,
