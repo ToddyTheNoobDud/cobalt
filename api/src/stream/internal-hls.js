@@ -1,6 +1,14 @@
 import HLS from "hls-parser";
 import { createInternalStream } from "./manage.js";
 
+function generateRandomIP() {
+    const octets = [];
+    for (let i = 0; i < 4; i++) {
+        octets.push(Math.floor(Math.random() * 256));
+    }
+    return `${octets.join(".")}`;
+}
+
 function getURL(url) {
     try {
         return new URL(url);
@@ -21,7 +29,11 @@ function transformObject(streamInfo, hlsObject) {
         fullUrl = new URL(hlsObject.uri, streamInfo.url);
     }
 
-    hlsObject.uri = createInternalStream(fullUrl.toString(), streamInfo);
+    const requestIP = streamInfo.requestIP || generateRandomIP();
+    hlsObject.uri = createInternalStream(fullUrl.toString(), {
+        ...streamInfo,
+        requestIP,
+    });
 
     if (hlsObject.map) {
         hlsObject.map = transformObject(streamInfo, hlsObject.map);
