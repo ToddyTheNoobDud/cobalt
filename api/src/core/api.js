@@ -90,7 +90,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         keyGenerator: req => req.rateLimitKey || keyGenerator(req),
         store: await createStore('tunnel'),
         handler: (_, res) => {
-            return res.sendStatus(429)
+            return res.sendStatus(400)
         }
     })
 
@@ -176,7 +176,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
     });
 
     app.post('/', apiLimiter);
-    app.use('/', express.json({ limit: 1024 }));
+    app.use('/', express.json({ limit: 1024, strict: false }));
 
     app.use('/', (err, _, res, next) => {
         if (err) {
@@ -238,7 +238,8 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             if (parsed?.context) {
                 context = parsed.context;
             }
-            return fail(res, `error.api.${parsed.error}`, context);
+            const status = parsed.error === "error.api.link.invalid" ? 400 : 404;
+            return fail(res, `error.api.${parsed.error}`, context, status);
         }
 
         try {
@@ -283,8 +284,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
         }
 
         return stream(res, streamInfo);
-    })
-
+    });
     const itunnelHandler = (req, res) => {
         if (!req.ip.endsWith('127.0.0.1')) {
             return res.sendStatus(403);
@@ -304,6 +304,10 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             ...Object.entries(req.headers)
         ]);
 
+        if (streamInfo.service === 'youtube' && streamInfo.isHLS) {
+            streamInfo.type = 'proxy';
+        }
+
         return stream(res, { type: 'internal', ...streamInfo });
     };
 
@@ -312,20 +316,20 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
     app.get('/', (_, res) => {
         res.type('json');
         res.status(200).send(serverInfo);
-    })
+    });
 
     app.get('/favicon.ico', (req, res) => {
         res.status(404).end();
-    })
+    });
 
     app.get('/*', (req, res) => {
         res.redirect('/');
-    })
+    });
 
     // handle all express errors
     app.use((_, __, res, ___) => {
         return fail(res, "error.api.generic");
-    })
+    });
 
     randomizeCiphers();
     setInterval(randomizeCiphers, 1000 * 60 * 30); // shuffle ciphers every 30 minutes
@@ -335,7 +339,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             throw new Error('Freebind is not available when external proxy is enabled')
         }
 
-        setGlobalDispatcher(new ProxyAgent(env.externalProxy))
+        setGlobalDispatcher(new ProxyAgent(env.externalProxy));
     }
 
     http.createServer(app).listen({
@@ -367,6 +371,7 @@ export const runAPI = async (express, app, __dirname, isPrimary = true) => {
             });
         }
     });
+
     if (isCluster) {
         const istreamer = express();
         istreamer.get('/itunnel', itunnelHandler);
