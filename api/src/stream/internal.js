@@ -2,9 +2,14 @@ import { request } from "undici";
 import { Readable } from "node:stream";
 import { closeRequest, getHeaders, pipe } from "./shared.js";
 import { handleHlsPlaylist, isHlsRequest } from "./internal-hls.js";
+import { randomBytes } from "crypto";
 
 const CHUNK_SIZE = BigInt(8e6); // 8 MB
 const min = (a, b) => a < b ? a : b;
+
+function randomIp() {
+    return Array.from({ length: 4 }, () => Math.floor(Math.random() * 256)).join('.');
+}
 
 async function* readChunks(streamInfo, size) {
     let read = 0n;
@@ -16,6 +21,7 @@ async function* readChunks(streamInfo, size) {
         const chunk = await request(streamInfo.url, {
             headers: {
                 ...getHeaders('youtube'),
+                'X-Forwarded-For': streamInfo.randomIp,
                 Range: `bytes=${read}-${read + CHUNK_SIZE}`
             },
             dispatcher: streamInfo.dispatcher,
@@ -42,8 +48,12 @@ async function handleYoutubeStream(streamInfo, res) {
     const cleanup = () => (res.end(), closeRequest(streamInfo.controller));
 
     try {
+        streamInfo.randomIp = randomIp();
         const req = await fetch(streamInfo.url, {
-            headers: getHeaders('youtube'),
+            headers: {
+                ...getHeaders('youtube'),
+                'X-Forwarded-For': streamInfo.randomIp,
+            },
             method: 'HEAD',
             dispatcher: streamInfo.dispatcher,
             signal
@@ -83,11 +93,16 @@ async function handleGenericStream(streamInfo, res) {
     const cleanup = () => res.end();
 
     try {
+        streamInfo.randomIp = randomIp();
         const req = await request(streamInfo.url, {
             headers: Object.fromEntries(streamInfo.headers).host ? {
                 ...Object.fromEntries(streamInfo.headers),
+                'X-Forwarded-For': streamInfo.randomIp,
                 host: undefined
-            } : streamInfo.headers,
+            } : {
+                ...streamInfo.headers,
+                'X-Forwarded-For': streamInfo.randomIp,
+            },
             dispatcher: streamInfo.dispatcher,
             signal,
             maxRedirections: 16
