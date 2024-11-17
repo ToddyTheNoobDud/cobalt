@@ -53,19 +53,24 @@ function transformMediaPlaylist(streamInfo, hlsPlaylist) {
 
 const HLS_MIME_TYPES = ["application/vnd.apple.mpegurl", "audio/mpegurl", "application/x-mpegURL"];
 
-export function isHlsResponse (req) {
+export function isHlsRequest(req) {
     return HLS_MIME_TYPES.includes(req.headers['content-type']);
 }
 
 export async function handleHlsPlaylist(streamInfo, req, res) {
-    let hlsPlaylist = await req.body.text();
-    hlsPlaylist = HLS.parse(hlsPlaylist);
+    try {
+        let hlsPlaylist = await req.body.text();
+        hlsPlaylist = HLS.parse(hlsPlaylist);
 
-    hlsPlaylist = hlsPlaylist.isMasterPlaylist
-        ? transformMasterPlaylist(streamInfo, hlsPlaylist)
-        : transformMediaPlaylist(streamInfo, hlsPlaylist);
+        hlsPlaylist = hlsPlaylist.isMasterPlaylist
+            ? transformMasterPlaylist(streamInfo, hlsPlaylist)
+            : transformMediaPlaylist(streamInfo, hlsPlaylist);
 
-    hlsPlaylist = HLS.stringify(hlsPlaylist);
+        hlsPlaylist = HLS.stringify(hlsPlaylist);
 
-    res.send(hlsPlaylist);
+        res.send(hlsPlaylist);
+    } catch (error) {
+        res.status(400).send({ error: "Invalid HLS Playlist" });
+    }
 }
+
